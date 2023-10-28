@@ -106,17 +106,47 @@ ggplot(pred,aes(x=r2.NC,y=r2.WI)) + geom_point() + coord_fixed(ratio=1) + xlim(0
   xlab("NC") + ylab("WI") + ggtitle("BV Reliability")
 ```
 
+
+```{r,fig.width=3,fig.height=3}
+locs <- c("WI","MI","OR","NY","NC","MO")
+blues <- ans1$blues[ans1$blues$loc %in% locs,]
+tmp <- sapply(strsplit(names(ans1$vcov),split="_"),"[[",1)
+vcov <- ans1$vcov[tmp %in% locs]
+
+ans2b <- Stage2(data=blues,vcov=vcov)
+
+prep1 <- blup_prep(data=blues,vcov=vcov,vars=ans2b$vars)
+
+WI.index <- c(WI=1, NC=0, OR=0, NY=0, MO=0, MI=0)  
+NC.index <- c(WI=0, NC=1, OR=0, NY=0, MO=0, MI=0)  
+
+WI.pred <- blup(data=prep1,geno=geno,index.coeff=WI.index,what="BV")
+NC.pred <- blup(data=prep1,geno=geno,index.coeff=NC.index,what="BV")
+
+pred <- merge(NC.pred,WI.pred,by="id")
+colnames(pred) <- c("id","BV.NC","r2.NC","BV.WI","r2.WI")
+
+ggplot(pred,aes(x=r2.NC,y=r2.WI)) + geom_point() + coord_fixed(ratio=1) + xlim(0.3,0.8) + ylim(0.3,0.8) + geom_line(data=data.frame(x=c(0.3,0.8),y=c(0.3,0.8)),mapping=aes(x=x,y=y),linetype=2) + theme_bw() + 
+  xlab("NC") + ylab("WI") + ggtitle("BV Reliability")
+```
+
 The above figure shows that breeding values were predicted with higher reliability in WI than NC, which is to be expected from the high correlation between WI and the other four sites (OR,MO,MI,NY) compared to NC.
 
 The `mask` argument for `blup_prep` can be used to mask individuals at one or more locations, to explore the accuracy of prediction into new environments. Whereas the previous analysis determined the reliability of GEBVs in WI when WI phenotypes are available, the next analysis excludes WI phenotypes: 
 
 ```{r, fig.width=3,fig.height=3}
+
+
+
 WI.env <- unique(blues$env[blues$loc=="WI"])
+NY.env <- unique(blues$env[blues$loc=="NY"])
 
-prep2 <- blup_prep(data=blues,vcov=vcov,geno=geno,vars=ans2c$vars,
-                   mask=data.frame(env=WI.env))
+prep2 <- blup_prep(data=blues,vcov=vcov,vars=ans2b$vars,
+                   mask=data.frame(env=c(WI.env, NY.env)))
 
-pred2 <- blup(data=prep2,geno=geno,index.coeff=WI.index,what="BV")
+index <- c(WI=1, NC=1, OR=0, NY=1, MO=0, MI=0)  
+
+pred2 <- blup(data=prep2,index.coeff=WI.index,what="GV")
 
 plot.data <- merge(pred2[,c("id","r2")],WI.pred[,c("id","r2")],by="id")
 colnames(plot.data) <- c("id","without.WI.pheno","with.WI.pheno")

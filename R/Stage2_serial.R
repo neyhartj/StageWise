@@ -12,6 +12,7 @@
 #'
 #' @param data data frame of BLUEs from Stage 1 (see Details)
 #' @param vcov named list of variance-covariance matrices for the BLUEs
+#' @param har.cor.str the covariance structure for the random genotype x harvest year effect
 #' @param geno output from \code{\link{read_geno}}
 #' @param fix.eff.marker markers in \code{geno} to include as additive fixed effect covariates
 #' @param silent TRUE/FALSE, whether to suppress ASReml-R output
@@ -37,23 +38,29 @@
 #'
 #' @export
 
-Stage2 <- function(data,vcov=NULL,geno=NULL,fix.eff.marker=NULL,
-                   silent=TRUE,workspace="500mb",non.add="g.resid",max.iter=20) {
+SerialStage2 <- function(data, vcov = NULL, har.cor.str = c("none", "idv", "corv", "corh", "ar1", "ar1h", "us"),
+                         geno = NULL, fix.eff.marker = NULL, silent = TRUE,
+                         workspace="500mb", non.add = c("g.resid", "none", "dom"), max.iter=20) {
 
   stopifnot(inherits(data,"data.frame"))
   stopifnot(requireNamespace("asreml"))
-  stopifnot(non.add %in% c("none","g.resid","dom"))
+  non.add <- match.arg(non.add)
+  har.cor.str <- match.arg(har.cor.str)
   if (non.add=="dom")
     stopifnot(class(geno)=="class_genoD")
   library(asreml)
-  stopifnot(c("id","env","BLUE") %in% colnames(data))
+
+  # Error handling
+  required_cols <- c("id", "har", "trl", "BLUE")
+  stopifnot(required_cols %in% colnames(data))
   data$id <- as.character(data$id)
-  data$env <- as.character(data$env)
-  data$env.id <- apply(data[,c("env","id")],1,paste,collapse=":")
+  data$har <- as.character(data$har)
+  data$trl <- as.character(data$trl)
+  data$id.har <- apply(data[,c("id","har")],1,paste,collapse=":")
 
   missing <- which(is.na(data$BLUE))
   if (length(missing) > 0) {
-    data <- data[!(data$env.id %in% data$env.id[missing]),]
+    data <- data[!(data$id.har %in% data$id.har[missing]),]
   }
 
   diagG <- diagD <- numeric(0)
@@ -96,17 +103,57 @@ Stage2 <- function(data,vcov=NULL,geno=NULL,fix.eff.marker=NULL,
     n.mark <- 0
   }
 
-  envs <- unique(data$env)
-  n.env <- length(envs)
-  if (n.env==1 & (non.add=="g.resid")) {
-    stop("Need more than one environment for g.resid model")
-  }
-  data$env <- factor(data$env,levels=envs)
-  data$id <- factor(data$id,levels=id)
-  env.id <- sort(unique(data$env.id))
-  data$env.id <- factor(data$env.id,levels=env.id)
 
-  out <- vector("list",4)
+  # harvest years
+  hars <- sort(unique(data$har))
+  n.har <- length(hars)
+  if (n.har == 1 & (non.add == "g.resid")) {
+    stop("Need more than one harvest year for g.resid model")
+  }
+  # Trials
+  trls <- unique(data$trl)
+  n.trl <- length(trls)
+
+  # Make sure to fill in the sequence of harvest years as factors
+  if (grepl("ar1", har.cor.str)) {
+    data$har <- fct_expand_seq(data$har)
+  } else {
+    data$har <- factor(data$har, levels = hars)
+  }
+  data$id <- factor(data$id,levels=id)
+  id.har <- sort(unique(data$id.har))
+  tmp <- expand.grid(har = levels(data$har), id = id)
+  id.har.all <- apply(tmp[,c("id","har")],1,paste,collapse=":")
+  data$id.har <- factor(data$id.har, levels = id.har.all)
+  trl.id.har <- paste0(data$trl, ":", id.har)
+  data$trl.id.har <- as.factor(trl.id.har)
+  data$trl <- factor(data$trl, levels = trls)
+
+
+  # Sort the data by trial then harvest year;
+  # expand the data if the cor.str is ar1 or ar1h
+  if ("loc" %in% names(data)) {
+    data <- data[order(data$trl, data$loc, data$har),]
+    data_tmp <- cbind(tmp, id.har = id.har.all)
+  } else {
+    if (grepl("ar1", har.cor.str)) {
+      data_tmp <- cbind(tmp, id.har = id.har.all)
+      data_tmp$id.har <- factor(data_tmp$id.har, levels = id.har.all)
+      data <- merge(x = data_tmp, y = data, all.x = TRUE)
+      hars <- as.character(sort(unique(data$har)))
+    }
+    data <- data[order(data$trl, data$har),]
+
+  }
+
+  # missing data per harvest year
+  har.miss <- tapply(X = data$BLUE, INDEX = data$har, FUN = function(x) sum(!is.na(x)))
+  har.miss[is.na(har.miss)] <- 0
+
+  # Calculate g x har weights
+  gH.weights <- table(na.omit(data)$id.har)
+
+  out <- vector("list", 4)
   names(out) <- c("aic","vars","fixed","random")
   n.loc <- 1
   n.trait <- 1
@@ -147,13 +194,16 @@ Stage2 <- function(data,vcov=NULL,geno=NULL,fix.eff.marker=NULL,
   }
 
   if (is.null(geno)) {
-    tmp <- c("env","fixed.marker","additive","add x loc","dominance","heterosis","genotype","g x loc","g x env","Stage1.error","residual")
+    tmp <- c("har","fixed.marker","additive","add x loc","dominance","heterosis","genotype","g x loc","g x har", "g x har corr", "Stage1.error","residual")
+    # tmp <- c("env","fixed.marker","additive","add x loc","dominance","heterosis","genotype","g x loc","g x env","Stage1.error","residual")
   } else {
-    tmp <- c("env","fixed.marker","additive","add x loc","dominance","heterosis","g.resid","g x loc","g x env","Stage1.error","residual")
+    tmp <- c("har","fixed.marker","additive","add x loc","dominance","heterosis","g.resid","g x loc","g x har", "g x har corr", "Stage1.error","residual")
+    # tmp <- c("env","fixed.marker","additive","add x loc","dominance","heterosis","g.resid","g x loc","g x env","Stage1.error","residual")
   }
-  vars <- array(data=numeric(0),dim=c(n.trait,n.trait,11),dimnames=list(traits,traits,tmp))
+  vars <- array(data=numeric(0),dim=c(n.trait,n.trait,length(tmp)),dimnames=list(traits,traits,tmp))
 
   if (n.trait==1) {
+    # Heterogeneous residual per location
     if (n.loc==1) {
       model <- "asreml(data=data,fixed=BLUE~FIX-1,random=~RANDOM,residual=~idv(units)"
     } else {
@@ -161,100 +211,104 @@ Stage2 <- function(data,vcov=NULL,geno=NULL,fix.eff.marker=NULL,
     }
     if (n.mark > 0 | (non.add=="dom")) {
       if (n.loc==1) {
-        model <- sub("FIX",paste(c("env",fix.eff.marker,dom),collapse="+"),model,fixed=T)
+        model <- sub("FIX",paste(c("har",fix.eff.marker,dom),collapse="+"),model,fixed=T)
       } else {
-        model <- sub("FIX",paste(c("env",paste0(c(fix.eff.marker,dom),":loc")),collapse="+"),model,fixed=T)
+        model <- sub("FIX",paste(c("har",paste0(c(fix.eff.marker,dom),":loc")),collapse="+"),model,fixed=T)
       }
     } else {
-      model <- sub("FIX","env",model,fixed=T)
+      model <- sub("FIX","har",model,fixed=T)
     }
   } else {
     model <- "asreml(data=data,fixed=BLUE~FIX-1,random=~RANDOM,residual=~id(env.id):us(Trait)"
     if (n.mark > 0 | (non.add=="dom")) {
-      model <- sub("FIX",paste(paste0(c("env",fix.eff.marker,dom),":Trait"),collapse="+"),model,fixed=T)
+      model <- sub("FIX",paste(paste0(c("har",fix.eff.marker,dom),":Trait"),collapse="+"),model,fixed=T)
     } else {
-      model <- sub("FIX","env:Trait",model,fixed=T)
+      model <- sub("FIX","har:Trait",model,fixed=T)
     }
   }
 
+  # Possibilities for formulating the random effects formula:
+  # 1. genotype data provided (GRM) or not
+  # 2. harvest year covariance
+  # 3. single location or multiple location
+  # 4. single trial or multiple trials
+  # 5. single trait or multiple traits
+  #
+
+  # 1. How to code genotypes
   if (is.null(geno)) {
-    if (n.loc > 1) {
-      random.effects <- ifelse(n.loc==2,"id:corh(loc)","id:fa(loc,2)")
+    random.effects.id <- "id"
+  } else {
+    random.effects.id <- "vm(id,source=asremlG,singG='PSD')"
+  }
+
+  # 2. How to code harvest year covariance
+  if (har.cor.str == "none") {
+    random.effects.har <- NULL
+    random.effects.idhar <- random.effects.id
+  } else {
+    if (n.har == 2) {
+      random.effects.har <- "corh(har)"
     } else {
-      if (n.trait > 1) {
-        random.effects <- ifelse(n.trait==2,"id:corh(Trait)","id:us(Trait)")
-      } else {
-        random.effects <- "id"
-      }
+      random.effects.har <- paste0(har.cor.str, "(har)")
+    }
+    # Combine id and har effects
+    random.effects.idhar <- paste0(random.effects.id, ":", random.effects.har)
+  }
+
+
+  # 3. How to code single locations
+  if (n.loc > 1) {
+    random.effects.loc.har <- paste0("loc:", random.effects.har)
+    if (n.loc == 2) {
+      random.effects.loc.gen.har <- paste0(random.effects.id, ":corh(loc):", random.effects.har)
+    } else {
+      random.effects.loc.gen.har <- paste0(random.effects.id, ":fa(loc, 2):", random.effects.har)
     }
   } else {
-    if (n.trait > 1) {
-      if (n.trait==2) {
-        random.effects <- "vm(id,source=asremlG,singG='PSD'):corh(Trait)"
-      } else {
-        random.effects <- "vm(id,source=asremlG,singG='PSD'):us(Trait)"
-      }
-      if (non.add=="g.resid") {
-        if (n.trait==2) {
-          random.effects <- paste(random.effects,"id:corh(Trait)",sep="+")
-        } else {
-          random.effects <- paste(random.effects,"id:us(Trait)",sep="+")
-        }
-      }
-      if (non.add=="dom") {
-        if (n.trait==2) {
-          random.effects <- paste(random.effects,"vm(id,source=asremlD):corh(Trait)",sep="+")
-        } else {
-          random.effects <- paste(random.effects,"vm(id,source=asremlD):us(Trait)",sep="+")
-        }
-      }
-    } else {
-      if (n.loc > 1) {
-        if (n.loc==2) {
-          random.effects <- "vm(id,source=asremlG,singG='PSD'):corh(loc)"
-        } else {
-          random.effects <- "vm(id,source=asremlG,singG='PSD'):fa(loc,2)"
-        }
-      } else {
-        random.effects <- "vm(id,source=asremlG,singG='PSD')"
-      }
-
-      if (non.add=="g.resid") {
-        if (n.loc > 1) {
-          random.effects <- paste(random.effects,"id:corh(loc)",sep="+")
-        } else {
-          random.effects <- paste(random.effects,"id",sep="+")
-        }
-      }
-      if (non.add=="dom") {
-        if (n.loc > 1) {
-          random.effects <- paste(random.effects,"vm(id,source=asremlD):corh(loc)",sep="+")
-        } else {
-          random.effects <- paste(random.effects,"vm(id,source=asremlD)",sep="+")
-        }
-      }
-    }
+    random.effects.loc.har <- random.effects.loc.gen.har <- NULL
   }
 
-  n.gE <- nrow(data)/n.trait
+  # 4. How to code single or multiple trials
+  if (n.trl > 1) {
+    random.effects.loc.trl.har <- paste0("loc:trl:", random.effects.har)
+  } else {
+    random.effects.loc.trl.har <- NULL
+  }
+
+  # 5. How to code single or multiple traits
+  if (n.trait > 1) {
+    stop ("Multiple traits are not yet supported")
+  }
+
+  # Combine random effects strings
+  random.effects <- paste(c(random.effects.idhar, random.effects.loc.har, random.effects.loc.gen.har, random.effects.loc.trl.har),
+                          collapse = " + ")
+
+
+  n.gE <- sum(!is.na(data$BLUE))/n.trait
+
   if (!is.null(vcov)) {
     stopifnot(is.list(vcov))
-    stopifnot(envs %in% names(vcov))
-    vcov <- vcov[envs]
-    vcov <- mapply(FUN=function(x,y){
-      tmp <- paste(y,rownames(x),sep=":")
-      dimnames(x) <- list(tmp,tmp)
+    stopifnot(trls %in% names(vcov))
+    vcov <- vcov[trls]
+    vcov <- mapply(FUN=function(x, y){
+      # Remove missing
+      # xmiss <-
+      tmp <- paste(y, rownames(x),sep=":")
+      dimnames(x) <- list(tmp, tmp)
       return(x)},x=vcov,y=as.list(names(vcov)))
+
     if (n.trait==1) {
-      ix <- lapply(vcov,function(y){which(rownames(y) %in% env.id)})
-      random.effects <- paste0(random.effects,"+vm(env.id,source=asremlOmega)")
+      ix <- lapply(vcov,function(y){which(rownames(y) %in% trl.id.har)})
+      random.effects <- paste0(random.effects,"+vm(trl.id.har,source=asremlOmega)")
     } else {
-      ix <- lapply(vcov,function(y){which(rownames(y) %in% env.id.trait)})
-      random.effects <- paste0(random.effects,"+vm(env.id.trait,source=asremlOmega)")
+      ix <- lapply(vcov,function(y){which(rownames(y) %in% tr.id.har.trait)})
+      random.effects <- paste0(random.effects,"+vm(trl.id.har.trait,source=asremlOmega)")
     }
 
-    omega.list <- vector("list",n.env)
-    for (j in 1:n.env) {
+    omega.list <- vector("list", n.trl)
+    for (j in 1:n.trl) {
       omega.list[[j]] <- as(vcov[[j]][ix[[j]],ix[[j]]],"dpoMatrix")
     }
     .GlobalEnv$asremlOmega <- direct_sum(lapply(omega.list,solve))
@@ -263,7 +317,7 @@ Stage2 <- function(data,vcov=NULL,geno=NULL,fix.eff.marker=NULL,
     attr(.GlobalEnv$asremlOmega,"INVERSE") <- TRUE
 
     Omega <- bdiag(omega.list)
-    ix <- split(1:(n.gE*n.trait),rep(1:n.trait,times=n.gE))
+    ix <- split(1:(n.gE * n.trait), rep(1:n.trait, times = n.gE))
     for (i in 1:n.trait)
       for (j in i:n.trait) {
         Omega_ij <- Omega[ix[[i]],ix[[j]]]
@@ -272,27 +326,25 @@ Stage2 <- function(data,vcov=NULL,geno=NULL,fix.eff.marker=NULL,
   }
 
   asreml::asreml.options(workspace=workspace,maxit=max.iter,trace=!silent)
-  model <- sub(pattern="RANDOM",replacement=random.effects,model,fixed=T)
-  model.init <- eval(parse(text=paste0(model,",start.values = TRUE)")))
-  start.table <- model.init$vparameters.table
-  G.param.init <- model.init$G.param
+  model <- sub(pattern = "RANDOM", replacement = random.effects, model, fixed = TRUE)
+
+  model_initial <- eval(parse(text=paste0(model,",start.values = TRUE, na.action = na.method(x = 'ignore'))")))
+  start.table <- model_initial$vparameters.table
 
   if (!is.null(vcov)) {
     k <- grep("Omega",start.table$Component,fixed=T)
     start.table$Value[k] <- 1
     start.table$Constraint[k] <- "F"
 
-    k <- grep("Omega", names(G.param.init))
-    for (l in k) {
-      kk <- grep("Omega", names(G.param.init[[l]]))
-      for (ll in kk) {
-        G.param.init[[l]][[ll]]$initial <- 1.0
-        G.param.init[[l]][[ll]]$con <- "F"
+    # Hold residual variance to 1
+    k <- grep("units",start.table$Component,fixed=T)
+    start.table$Value[k] <- 1
+    start.table$Constraint[k] <- "F"
 
-      }
-    }
+    model <- paste0(model, ", R.param = start.table")
 
   }
+
   if (!is.null(geno) & (n.loc > 1)) {
     k <- grep(":loc!loc!cor",start.table$Component,fixed=T)
     k2 <- grep("asremlG",start.table$Component,fixed=T)
@@ -300,10 +352,19 @@ Stage2 <- function(data,vcov=NULL,geno=NULL,fix.eff.marker=NULL,
     start.table$Value[k] <- 0.9999
     start.table$Constraint[k] <- "F"
   }
-  ans <- eval(parse(text=paste0(model,",G.param=start.table)")))
+
+  # # Expand grid
+  # data1 <- expand.grid(trl = trls, har = levels(data$har), id = levels(data$id), stringsAsFactors = TRUE)
+  # data1$id.har <- as.factor(id.har.all)
+  # data1 <- merge(x = data1, y = data[,c("trl", "har", "id", "BLUE")], all.x = TRUE, all.y = FALSE)
+
+  ans <- eval(parse(text = paste0(model,", G.param = start.table, na.action = na.method(x = 'ignore'))")))
+  # ans <- eval(parse(text = paste0(model,", family = asr_gaussian(dispersion = 1.0))")))
   if (!ans$converge) {
     stop("ASReml-R did not converge. Try increasing max.iter")
   }
+
+
   # while (!ans$converge) {
   #   cat("ASReml-R failed to converge. Do you wish to continue running? y/n \n")
   #   input <- readLines(n=1)
@@ -324,12 +385,13 @@ Stage2 <- function(data,vcov=NULL,geno=NULL,fix.eff.marker=NULL,
   if (n.trait==1) {
     beta <- sans$coef.fixed
     beta.names <- rownames(beta)
-    beta.names <- gsub("env_","",beta.names)
-    ix <- match(levels(data$env),beta.names)
-    out$params$env <- data.frame(env=levels(data$env),
+    beta.names <- gsub("har_","",beta.names)
+    ix <- match(levels(data$har),beta.names)
+    out$params$har <- data.frame(har=levels(data$har),
                                  estimate=as.numeric(beta[ix,1]),
                                  SE=as.numeric(beta[ix,2]))
-    vars[1,1,"env"] <- pvar(mu=out$params$env$estimate,weights=as.numeric(table(data$env)))
+    har_weights <- tapply(X = data$BLUE, INDEX = data$har, FUN = function(x) sum(!is.na(x)))
+    vars[1,1,"har"] <- pvar(mu=out$params$har$estimate,weights=as.numeric(har_weights))
 
     if (non.add=="dom") {
       ix <- grep("dom",beta.names,fixed=T)
@@ -446,14 +508,21 @@ Stage2 <- function(data,vcov=NULL,geno=NULL,fix.eff.marker=NULL,
 
   #variances
   vc <- sans$varcomp
-  vc <- vc[-which(vc$bound=="F" & round(vc$component)==1L),]
+  # Rescale if using vcov
+  if (!is.null(vcov)) {
+    vc$component <- ans$vparameters
+    vc <- vc[-which(vc$bound=="F" & round(vc$component)==1L),]
+  } else {
+    vc <- vc[-which(row.names(vc) == "units!units"),]
+  }
+
   vc.names <- rownames(vc)
   name2 <- vc.names
-  name2 <- gsub("vm(id, source = asremlG, singG = \"PSD\")","additive",name2,fixed=T)
-  name2 <- gsub("vm(id, source = asremlD)","dominance",name2,fixed=T)
+  name2 <- gsub("vm(trl.id.har, source = asremlG, singG = \"PSD\")","additive",name2,fixed=T)
+  name2 <- gsub("vm(trl.id.har, source = asremlD)","dominance",name2,fixed=T)
   name2 <- gsub("units!units","residual",name2,fixed=T)
   name2 <- gsub("units","residual",name2,fixed=T)
-  name2 <- gsub("env.id","residual",name2,fixed=T)
+  name2 <- gsub("har.id","residual",name2,fixed=T)
   name2 <- gsub("Trait!Trait!","",name2,fixed=T)
   name2 <- gsub("Trait!Trait_","",name2,fixed=T)
   out$params$vc <- data.frame(name=name2,
@@ -463,7 +532,11 @@ Stage2 <- function(data,vcov=NULL,geno=NULL,fix.eff.marker=NULL,
   dimnames(Imat) <- list(id,id)
 
   if (n.trait==1) {
-    resid.vc <- Matrix(vc[grep("units",vc.names,fixed=T),1],ncol=1)
+    if (!is.null(vcov)) {
+      resid.vc <- Matrix(vars[1,1,"Stage1.error"], nrow = 1, ncol = 1)
+    } else {
+      resid.vc <- Matrix(vc[grep("units",vc.names,fixed=T),1],ncol=1)
+    }
 
     if (n.loc > 1) {
       rownames(resid.vc) <- locations
@@ -479,14 +552,14 @@ Stage2 <- function(data,vcov=NULL,geno=NULL,fix.eff.marker=NULL,
         } else {
           iz <- grep("id:loc",vc.names,fixed=T)
         }
-        cov.ans <- f.cov.loc(vc = vc[iz,], locations)
+        cov.ans <- f.cov.loc(vc=vc[iz,], locations)
         geno1.vc <- cov.ans$cov.mat
         geno2.vc <- Matrix(NA,nrow=0,ncol=0)
         model <- 0L
         vars[1,1,"genotype"] <- mean(geno1.vc[upper.tri(geno1.vc,diag=FALSE)])*(1 - 1/n)
 
         K <- kronecker(Imat,geno1.vc,make.dimnames = T)
-        vars[1,1,"g x loc"] <- pvar(V = K, weights = gL.weights) - vars[1,1,"genotype"]
+        vars[1,1,"g x har"] <- pvar(V = K, weights=gH.weights) - vars[1,1,"genotype"]
 
       } else {
         cov.ans <- f.cov.loc(vc[grep("source = asremlG",vc.names,fixed=T),],locations)
@@ -520,17 +593,34 @@ Stage2 <- function(data,vcov=NULL,geno=NULL,fix.eff.marker=NULL,
     } else {
 
       #one location
-      if (!is.null(vcov)) {
-        vars[1,1,"g x env"] <- as.numeric(resid.vc)*(1 - 1/n.gE)
-      } else {
+      if (is.null(vcov)) {
         vars[1,1,"residual"] <- as.numeric(resid.vc)*(1 - 1/n.gE)
       }
 
       if (is.null(geno)) {
+        # Get the g x har VCOV matrix
         model <- 0L
-        geno1.vc <- Matrix(vc["id",1],ncol=1)
+        # Create a matrix of the cor structure is none
+        if (har.cor.str == "none") {
+          cov.ans <- matrix(ans$vparameters["id"], nrow = n.har, ncol = n.har)
+        } else {
+          cov.ans <- getVarCov.asreml(asreml.obj = ans, which.matrix = "G", ignore.terms = setdiff(names(ans$G.param), "id:har"),
+                                      ignore.vars = list("id:har" = c("id")))
+        }
+        geno1.vc <- cov.ans * ans$sigma2
+        dimnames(geno1.vc) <- list(hars, hars)
+        geno1.vc <- coerce_dpo(geno1.vc)
         geno2.vc <- Matrix(NA,nrow=0,ncol=0)
-        vars[1,1,"genotype"] <- as.numeric(geno1.vc)*(1 - 1/n)
+        if (har.cor.str == "none") {
+          vars[1,1,"genotype"] <- mean(geno1.vc[upper.tri(geno1.vc,diag=FALSE)])
+        } else {
+          vars[1,1,"genotype"] <- mean(geno1.vc[upper.tri(geno1.vc,diag=FALSE)])*(1 - 1/n)
+          K <- kronecker(Imat,geno1.vc,make.dimnames = T)
+          vars[1,1,"g x har"] <- pvar(V = K, weights = gH.weights) - vars[1,1,"genotype"]
+        }
+
+        vars[1,1,"g x har corr"] <- vc["id:har!har!cor",1]
+
       } else {
         model <- 1L
         geno1.vc <- Matrix(vc[grep("source = asremlG",vc.names,fixed=T),1],ncol=1)
@@ -603,11 +693,12 @@ Stage2 <- function(data,vcov=NULL,geno=NULL,fix.eff.marker=NULL,
     }
   }
 
-  if (n.mark==0)
+  if (n.mark==0) {
     fix.eff.marker <- character(0)
+  }
 
   if (n.trait > 1) {
-    for (i in 1:11)
+    for (i in seq_len(dim(vars)[3]))
       vars[,,i][lower.tri(vars[,,i])] <- vars[,,i][upper.tri(vars[,,i])]
   }
 
@@ -615,8 +706,13 @@ Stage2 <- function(data,vcov=NULL,geno=NULL,fix.eff.marker=NULL,
                   resid=resid.vc,diagG=diagG,diagD=diagD,
                   vars=vars,B=B,fix.eff.marker=fix.eff.marker)
 
+  # Return a copy of the BLUEs
+  out$data <- data
+
   #random effects
   if (n.trait==1) {
+    # id har names
+    id.har.names <- expand.grid(id = id, har = hars, stringsAsFactors = FALSE)
     u <- sans$coef.random
     if (n.loc > 1) {
       id.loc.names <- expand.grid(loc=locations,id=id,stringsAsFactors = F)[,c(2,1)]
@@ -667,8 +763,10 @@ Stage2 <- function(data,vcov=NULL,geno=NULL,fix.eff.marker=NULL,
           out$random$dom=as.numeric(u[ix2,1])
         }
       } else {
-        ix <- match(paste("id",id,sep="_"),rownames(u))
-        out$random <- data.frame(id=id,g.iid=as.numeric(u[ix,1]))
+        # Get id - har BLUPs
+        id.har.use <- expand.grid(paste0("id_",id), paste0("har_", hars), stringsAsFactors = F)
+        ix <- match(apply(id.har.use,1, paste, collapse=":"), rownames(u))
+        out$random <- data.frame(id.har.names, g.iid = as.numeric(u[ix,1]))
       }
     }
   } else {

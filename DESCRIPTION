@@ -12,6 +12,7 @@ Imports: Matrix (>= 1.5-0), ggplot2, methods, ggrepel, rlang, ggpubr, SpATS, spa
 Suggests: knitr, rmarkdown, asreml
 Collate: 
     'Stage1.R'
+    'Stage1_serial.R'
     'Stage2.R'
     'blup.R'
     'blup_prep.R'

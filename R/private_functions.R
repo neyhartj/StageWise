@@ -13,12 +13,12 @@ pvar <- function(mu=0,V=NULL,weights=NULL) {
   } else {
     n <- length(mu)
   }
-  if (is.null(weights)) {    
+  if (is.null(weights)) {
     weights <- rep(1,n)
-  } 
+  }
   weights <- weights/sum(weights)
   if (!is.null(V)) {
-    x <- sum(diag(V)*weights) - matrix(weights,nrow=1)%*%V%*%matrix(weights,ncol=1) + sum(mu^2*weights) - sum(mu*weights)^2
+    x <- sum(diag(V)*weights) - matrix(weights,nrow=1) %*% V %*% matrix(weights,ncol=1) + sum(mu^2*weights) - sum(mu*weights)^2
   } else {
     x <- sum(mu^2*weights) - sum(mu*weights)^2
   }
@@ -68,7 +68,7 @@ coerce_dpo <- function(x) {
       return(x2)
     }
   }
-  
+
   d <- Diagonal(x=1/sqrt(diag(x)))
   x2 <- crossprod(d,x%*%d)
   eg <- eigen(x2,symmetric=TRUE)
@@ -130,17 +130,52 @@ f.cov.loc <- function(vc,locs) {
     fa.mat[,2] <- vc[ix,1]
     cov.mat <- tcrossprod(fa.mat) + psi
   }
-  
+
   #rotate
   tmp <- svd(fa.mat)
   fa.mat <- tmp$u %*% diag(tmp$d)
   #scale
   D <- diag(1/sqrt(diag(cov.mat)))
   dimnames(D) <- list(locs,locs)
-  
+
   return(list(cov.mat=coerce_dpo(cov.mat),
               loadings=D%*%fa.mat))
 }
+
+
+f.cov.har <- function(vc, locs) {
+  n.loc <- length(locs)
+  vcnames <- rownames(vc)
+  if (n.loc==2) {
+    iu <- apply(array(locs),1,grep,x=vcnames,fixed=T)
+    cov.mat <- diag(vc[iu,1])
+    dimnames(cov.mat) <- list(locs,locs)
+    cov.mat[1,2] <- cov.mat[2,1] <- vc[1,1]*sqrt(vc[iu[1],1]*vc[iu[2],1])
+    fa.mat <- t(chol(cov.mat))
+  } else {
+    psi <- diag(vc[apply(array(paste0(locs,"!var")),1,grep,x=vcnames,fixed=T),1])
+    fa.mat <- matrix(0,nrow=n.loc,ncol=2)
+    rownames(fa.mat) <- locs
+    ix <- apply(array(paste0(locs,"!fa1")),1,grep,x=vcnames,fixed=T)
+    fa.mat[,1] <- vc[ix,1]
+    ix <- apply(array(paste0(locs,"!fa2")),1,grep,x=vcnames,fixed=T)
+    fa.mat[,2] <- vc[ix,1]
+    cov.mat <- tcrossprod(fa.mat) + psi
+  }
+
+  #rotate
+  tmp <- svd(fa.mat)
+  fa.mat <- tmp$u %*% diag(tmp$d)
+  #scale
+  D <- diag(1/sqrt(diag(cov.mat)))
+  dimnames(D) <- list(locs,locs)
+
+  return(list(cov.mat=coerce_dpo(cov.mat),
+              loadings=D%*%fa.mat))
+}
+
+
+
 
 cov_to_cor <- function(x) {
   d <- Diagonal(x=1/sqrt(diag(x)))
@@ -150,10 +185,10 @@ cov_to_cor <- function(x) {
 }
 
 direct_sum <- function(x) {
-  n <- length(x) 
+  n <- length(x)
   m <- sapply(x,nrow)
   m.cumulative <- apply(array(1:n),1,function(k){sum(m[1:k])})
-  
+
   z <- expand.grid(col=1:m[1],row=1:m[1])
   out <- data.frame(row=z$row,col=z$col,value=as.vector(x[[1]]))
   if (n > 1) {
