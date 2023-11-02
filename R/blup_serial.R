@@ -89,7 +89,9 @@ blup_serial <- function(data, geno=NULL, what, index.coeff=NULL, gwas.ncore=0L) 
     index.coeff <- rep(1, nhar)
     names(index.coeff) <- names(index.scale)
     index.coeff <- index.coeff/as.numeric(index.scale)
-    index.coeff <- index.coeff/sqrt(sum(index.coeff^2))
+    # index.coeff <- index.coeff/sqrt(sum(index.coeff^2))
+    index.coeff <- index.coeff/sum(index.coeff)
+
 
   } else {
     index.over.hars <- TRUE
@@ -103,6 +105,8 @@ blup_serial <- function(data, geno=NULL, what, index.coeff=NULL, gwas.ncore=0L) 
       if (nchar(what)==2) {
         index.coeff <- index.coeff/as.numeric(index.scale)
         index.coeff <- index.coeff/sqrt(sum(index.coeff^2))
+        # index.coeff <- index.coeff/sqrt(sum(index.coeff^2))
+        index.coeff <- index.coeff/sum(index.coeff)
       } else {
         #do not rescale
         what <- substr(what,1,2)

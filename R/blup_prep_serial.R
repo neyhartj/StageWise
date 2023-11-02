@@ -102,6 +102,7 @@ blup_prep_serial <- function(data, vcov = NULL, geno = NULL, vars, mask = NULL, 
   #redo trl or hars because some may have been dropped
   data$har <- as.character(data$har)
   trls <- levels(data$trl)
+  n.trl <- length(trls)
   # Get the hars from the GxH VCOV matrix in vars
   hars <- colnames(vars@geno1)
   # hars <- unique(data$har)
