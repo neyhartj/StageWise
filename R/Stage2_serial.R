@@ -38,8 +38,8 @@
 #'
 #' @export
 
-SerialStage2 <- function(data, vcov = NULL, har.cor.str = c("none", "idv", "corv", "corh", "ar1", "ar1h", "us"),
-                         geno = NULL, fix.eff.marker = NULL, silent = TRUE,
+SerialStage2 <- function(data, vcov = NULL, har.cor.str = c("idt", "corv", "corh", "ar1", "ar1h", "us"),
+                         geno = NULL, fix.eff.marker = NULL, silent = TRUE, rescale = FALSE,
                          workspace="500mb", non.add = c("g.resid", "none", "dom"), max.iter=20) {
 
   stopifnot(inherits(data,"data.frame"))
@@ -142,9 +142,11 @@ SerialStage2 <- function(data, vcov = NULL, har.cor.str = c("none", "idv", "corv
       data <- merge(x = data_tmp, y = data, all.x = TRUE)
       hars <- as.character(sort(unique(data$har)))
     }
-    data <- data[order(data$trl, data$har),]
+    data <- data[order(data$trl.id.har),]
 
   }
+
+
 
   # missing data per harvest year
   har.miss <- tapply(X = data$BLUE, INDEX = data$har, FUN = function(x) sum(!is.na(x)))
@@ -243,7 +245,7 @@ SerialStage2 <- function(data, vcov = NULL, har.cor.str = c("none", "idv", "corv
   }
 
   # 2. How to code harvest year covariance
-  if (har.cor.str == "none") {
+  if (har.cor.str == "idt") {
     random.effects.har <- NULL
     random.effects.idhar <- random.effects.id
   } else {
@@ -341,7 +343,7 @@ SerialStage2 <- function(data, vcov = NULL, har.cor.str = c("none", "idv", "corv
     start.table$Value[k] <- 1
     start.table$Constraint[k] <- "F"
 
-    model <- paste0(model, ", R.param = start.table")
+    # model <- paste0(model, ", R.param = start.table")
 
   }
 
@@ -363,6 +365,38 @@ SerialStage2 <- function(data, vcov = NULL, har.cor.str = c("none", "idv", "corv
   if (!ans$converge) {
     stop("ASReml-R did not converge. Try increasing max.iter")
   }
+
+  ## Try adjusting the R matrix instead
+
+#
+#   model_initial <- asreml(data=data1, fixed=BLUE~har-1, random=~id:ar1(har),
+#                           residual= ~ trl.id.har, start.values = TRUE, na.action = na.method(x = 'ignore'))
+#   start.table <- model_initial$vparameters.table
+#   R_param <- model_initial$R.param
+#
+#
+#   if (!is.null(vcov)) {
+#     k <- grep("Omega",start.table$Component,fixed=T)
+#     start.table$Value[k] <- 1
+#     start.table$Constraint[k] <- "F"
+#
+#     # Hold residual variance to 1
+#     k <- grep("units",start.table$Component,fixed=T)
+#     start.table$Value[k] <- 1
+#     start.table$Constraint[k] <- "F"
+#
+#     model <- paste0(model, ", R.param = start.table")
+#
+#   }
+#
+#   if (!is.null(geno) & (n.loc > 1)) {
+#     k <- grep(":loc!loc!cor",start.table$Component,fixed=T)
+#     k2 <- grep("asremlG",start.table$Component,fixed=T)
+#     k <- setdiff(k,k2)
+#     start.table$Value[k] <- 0.9999
+#     start.table$Constraint[k] <- "F"
+#   }
+#
 
 
   # while (!ans$converge) {
@@ -508,10 +542,13 @@ SerialStage2 <- function(data, vcov = NULL, har.cor.str = c("none", "idv", "corv
 
   #variances
   vc <- sans$varcomp
-  # Rescale if using vcov
-  if (!is.null(vcov)) {
+  # Rescale if called
+  if (rescale) {
     vc$component <- ans$vparameters
-    vc <- vc[-which(vc$bound=="F" & round(vc$component)==1L),]
+  }
+
+  if (!is.null(vcov)) {
+    vc <- vc[-which(vc$bound=="F" & !grepl("har!cor", row.names(vc))),]
   } else {
     vc <- vc[-which(row.names(vc) == "units!units"),]
   }
@@ -601,18 +638,19 @@ SerialStage2 <- function(data, vcov = NULL, har.cor.str = c("none", "idv", "corv
         # Get the g x har VCOV matrix
         model <- 0L
         # Create a matrix of the cor structure is none
-        if (har.cor.str == "none") {
-          cov.ans <- matrix(ans$vparameters["id"], nrow = n.har, ncol = n.har)
+        if (har.cor.str == "idt") {
+          cov.ans <- diag(ans$vparameters["id"], nrow = n.har, ncol = n.har)
         } else {
-          cov.ans <- getVarCov.asreml(asreml.obj = ans, which.matrix = "G", ignore.terms = setdiff(names(ans$G.param), "id:har"),
+          cov.ans <- getVarCov.asreml(asreml.obj = ans, which.matrix = "G",
+                                      ignore.terms = setdiff(names(ans$G.param), "id:har"),
                                       ignore.vars = list("id:har" = c("id")))
         }
         geno1.vc <- cov.ans * ans$sigma2
         dimnames(geno1.vc) <- list(hars, hars)
         geno1.vc <- coerce_dpo(geno1.vc)
         geno2.vc <- Matrix(NA,nrow=0,ncol=0)
-        if (har.cor.str == "none") {
-          vars[1,1,"genotype"] <- mean(geno1.vc[upper.tri(geno1.vc,diag=FALSE)])
+        if (har.cor.str == "idt") {
+          vars[1,1,"genotype"] <- mean(diag(geno1.vc))
         } else {
           vars[1,1,"genotype"] <- mean(geno1.vc[upper.tri(geno1.vc,diag=FALSE)])*(1 - 1/n)
           K <- kronecker(Imat,geno1.vc,make.dimnames = T)
@@ -705,9 +743,6 @@ SerialStage2 <- function(data, vcov = NULL, har.cor.str = c("none", "idv", "corv
   out$vars <- new(Class="class_var",geno1=geno1.vc,geno2=geno2.vc,model=model,
                   resid=resid.vc,diagG=diagG,diagD=diagD,
                   vars=vars,B=B,fix.eff.marker=fix.eff.marker)
-
-  # Return a copy of the BLUEs
-  out$data <- data
 
   #random effects
   if (n.trait==1) {

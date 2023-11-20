@@ -7,10 +7,11 @@
 SerialStage2(
   data,
   vcov = NULL,
-  har.cor.str = c("none", "idv", "corv", "corh", "ar1", "ar1h", "us"),
+  har.cor.str = c("idt", "corv", "corh", "ar1", "ar1h", "us"),
   geno = NULL,
   fix.eff.marker = NULL,
   silent = TRUE,
+  rescale = FALSE,
   workspace = "500mb",
   non.add = c("g.resid", "none", "dom"),
   max.iter = 20
