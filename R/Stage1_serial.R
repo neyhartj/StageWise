@@ -155,14 +155,27 @@ SerialStage1 <- function(filename, data, traits, effects = NULL, cor.effects = N
     residual <- as.character(residual)[2]
   }
 
+  # Number of harvests per experiment
+  har_exp_tab <- table(data$expt, data$har)
+  har_exp_tab <- ifelse(har_exp_tab > 1, 1, 0)
+
+  # COunt the number of hars
+  mult.har <- any(rowSums(har_exp_tab) > 1)
+
   if (n.trait == 1) {
     if (solver=="ASREML") {
       model <- sub("traits",traits,
                  "asreml(data=data1,na.action=na.method(x='omit'),fixed=traits~FIX,random=~RANDOM,residual=~RESIDUAL)",fixed=T)
       model <- sub(pattern = "RESIDUAL", replacement = residual, x = model)
-      effect.table[1,1] <- "id + har + id:har"
-      effect.table[2,1] <- "har"
-      effect.table[2,2] <- "+ id + id:har"
+
+      if (mult.har) {
+        effect.table[1,1] <- "id + har + id:har"
+        effect.table[2,1] <- "har"
+        effect.table[2,2] <- "+ id + id:har"
+      } else {
+        effect.table[1,1] <- "id"
+        effect.table[2,2] <- "id"
+      }
     }
     if (solver=="SPATS")
       model <- sub("traits",traits,
@@ -319,7 +332,11 @@ SerialStage1 <- function(filename, data, traits, effects = NULL, cor.effects = N
     #BLUP model
     if (n.trait==1) {
       ans <- try(eval(parse(text=blup.model)),silent=TRUE)
-      if ((class(ans)=="try-error") || ((solver=="ASREML")&&(!ans$converge))) {
+      # If class error; print the error
+      if (class(ans) == "try-error") {
+        cat("Error in BLUP model: ", ans)
+        next
+      } else if (solver == "ASREML" && (!ans$converge)) {
         cat("BLUP model failed to converge.\n")
         next
       }
@@ -421,39 +438,69 @@ SerialStage1 <- function(filename, data, traits, effects = NULL, cor.effects = N
 
   for (j in which(nee > 1)) {
 
-    omega.list <- vcov[expt.in.env[[j]]]
+    omega.list <- vcov[expt.in.trl[[j]]]
     vcov2 <- mapply(FUN=function(x,y){
       tmp <- paste(y,rownames(x),sep=":")
       dimnames(x) <- list(tmp,tmp)
-      return(x)},x=omega.list,y=as.list(expt.in.env[[j]]))
+      return(x)},x=omega.list,y=as.list(expt.in.trl[[j]]))
 
     .GlobalEnv$asremlOmega <- direct_sum(lapply(vcov2,solve))
     dname <- lapply(vcov2,rownames)
     dimnames(.GlobalEnv$asremlOmega) <- list(unlist(dname),unlist(dname))
     attr(.GlobalEnv$asremlOmega,"INVERSE") <- TRUE
 
-    ix <- which(blue.out$env==envs[j])
+    ix <- which(blue.out$trl==trls[j])
     data2 <- blue.out[ix,]
     data2$expt.id <- factor(paste(data2$expt,data2$id,sep=":"))
     data2$id <- factor(data2$id)
     data2$expt <- factor(data2$expt)
-    start.table <- asreml::asreml(data=data2,fixed=BLUE~expt-1+id,
-                          random=~vm(expt.id,source=asremlOmega),
-                          residual=~idv(units),start.values=TRUE)$vparameters.table
+    # Convert expt to numeric
+    data2$expt_n <- as.numeric(data2$expt)
+    # Weights vector
+    wts <- do.call("c", map(vcov2, diag))
+    data2$smith.w <- 1 / wts
+
+    ## Prepare the model but do not fit it
+    initial <- asreml(fixed = BLUE ~ expt+ id,
+                      random = ~ vm(expt.id, source = asremlOmega),
+                      residual = ~ idv(units),
+                      data = data2,
+                      na.action = na.method(y = "omit", x = "omit"),
+                      # family = asr_gaussian(dispersion = 1.0),
+                      # weights = smith.w,
+                      start.values = TRUE)
+
+    # Edit the components
+    start.table <- initial$vparameters.table
     k <- grep("Omega",start.table$Component,fixed=T)
     start.table$Value[k] <- 1
     start.table$Constraint[k] <- "F"
-    ans3 <- asreml::asreml(data=data2,fixed=BLUE~expt-1+id,
-                   random=~vm(expt.id,source=asremlOmega),
-                   residual=~idv(units),G.param=start.table)
 
-    predans3 <- asreml::predict.asreml(ans3,classify="id",vcov = TRUE)
+    # Fit
+    ans3 <- asreml(fixed = BLUE ~ expt + id,
+                   random = ~ vm(expt.id, source = asremlOmega),
+                   residual = ~ idv(units),
+                   data = data2,
+                   na.action = na.method(y = "omit", x = "omit"),
+                   # family = asr_gaussian(dispersion = 1.0),
+                   # weights = smith.w,
+                   G.param = start.table)
+
+    # Predict overall id means
+    predans3 <- asreml::predict.asreml(ans3, classify="id", vcov = TRUE)
     blue3 <- data.frame(expt=NA,predans3$pvals[,c("id","predicted.value")],env=envs[j])
+    ## Predict slopes
+    # First predict means from the early and late harvests
+    predans3_slopes <- asreml::predict.asreml(ans3, classify="id:expt_n",
+                                              levels = list(expt_n = range(data2$expt_n)), vcov = TRUE, sed = TRUE)
+    # Take the different per genotype; calculate standard
+
+
     colnames(blue3) <- c("expt","id","BLUE","env")
     vcov3 <- predans3$vcov
     dimnames(vcov3) <- list(blue3$id,blue3$id)
-    vcov2 <- vcov[-match(expt.in.env[[j]],names(vcov))]
-    vcov <- c(vcov2,vcov3)
+    vcov2 <- vcov[-match(expt.in.trl[[j]], names(vcov))]
+    vcov <- c(vcov2, vcov3)
     names(vcov) <- c(names(vcov2),envs[j])
     blue.out <- rbind(blue.out[-ix,],blue3)
     rm("asremlOmega",envir = .GlobalEnv)
@@ -464,7 +511,11 @@ SerialStage1 <- function(filename, data, traits, effects = NULL, cor.effects = N
   } else {
     blue.out <- blue.out[,c("trl",strsplit(pred.terms, ":")[[1]], "trait","BLUE")]
   }
-  blue.out <- blue.out[order(blue.out$trl,blue.out$id, blue.out$har),]
+  if ("har" %in% colnames(blue.out)) {
+    blue.out <- blue.out[order(blue.out$trl, blue.out$id, blue.out$har),]
+  } else {
+    blue.out <- blue.out[order(blue.out$trl, blue.out$id),]
+  }
   if ("loc" %in% colnames(data)) {
     blue.out$loc <- as.character(data$loc[match(blue.out$trl, data$trl)])
   }
