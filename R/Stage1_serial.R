@@ -49,7 +49,8 @@
 #' @export
 #'
 SerialStage1 <- function(filename, data, traits, effects = NULL, cor.effects = NULL,
-                         solver=c("asreml"), spline=NULL, residual = NULL, silent=TRUE,
+                         solver=c("asreml"), spline=NULL, residual = NULL, silent = TRUE,
+
                          pred.terms, workspace=c("500mb","500mb")) {
 
   if (missing(data)) {
@@ -489,12 +490,6 @@ SerialStage1 <- function(filename, data, traits, effects = NULL, cor.effects = N
     # Predict overall id means
     predans3 <- asreml::predict.asreml(ans3, classify="id", vcov = TRUE)
     blue3 <- data.frame(expt=NA,predans3$pvals[,c("id","predicted.value")],env=envs[j])
-    ## Predict slopes
-    # First predict means from the early and late harvests
-    predans3_slopes <- asreml::predict.asreml(ans3, classify="id:expt_n",
-                                              levels = list(expt_n = range(data2$expt_n)), vcov = TRUE, sed = TRUE)
-    # Take the different per genotype; calculate standard
-
 
     colnames(blue3) <- c("expt","id","BLUE","env")
     vcov3 <- predans3$vcov
