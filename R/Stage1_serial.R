@@ -50,7 +50,6 @@
 #'
 SerialStage1 <- function(filename, data, traits, effects = NULL, cor.effects = NULL,
                          solver=c("asreml"), spline=NULL, residual = NULL, silent = TRUE,
-
                          pred.terms, workspace=c("500mb","500mb")) {
 
   if (missing(data)) {

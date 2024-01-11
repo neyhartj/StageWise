@@ -64,9 +64,13 @@ coerce_dpo <- function(x) {
   x2 <- try(as(x,"dpoMatrix"),silent=TRUE)
   if (class(x2)=="dpoMatrix") {
     tmp <- try(Cholesky(x2), silent = TRUE)
-    # tmp <- try(chol(x2),silent=TRUE)
     if (class(tmp)=="Cholesky") {
       return(x2)
+    } else {
+      tmp <- try(chol(x2),silent=TRUE)
+      if (class(tmp)=="Cholesky") {
+        return(x2)
+      }
     }
   }
 

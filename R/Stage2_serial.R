@@ -51,11 +51,13 @@ SerialStage2 <- function(data, vcov = NULL, har.cor.str = c("idt", "corv", "corh
   library(asreml)
 
   # Error handling
-  required_cols <- c("id", "har", "trl", "BLUE")
+  required_cols <- c("id", "har", "trl", "subtrl", "BLUE")
   stopifnot(required_cols %in% colnames(data))
   data$id <- as.character(data$id)
   data$har <- as.character(data$har)
   data$trl <- as.character(data$trl)
+  data$id.trl <- apply(data[,c("id","trl")],1,paste,collapse=":")
+  data$id.subtrl <- apply(data[,c("id","subtrl")],1,paste,collapse=":")
   data$id.har <- apply(data[,c("id","har")],1,paste,collapse=":")
 
   missing <- which(is.na(data$BLUE))
@@ -113,6 +115,8 @@ SerialStage2 <- function(data, vcov = NULL, har.cor.str = c("idt", "corv", "corh
   # Trials
   trls <- unique(data$trl)
   n.trl <- length(trls)
+  subtrls <- unique(data$subtrl)
+  n.subtrl <- length(subtrls)
 
   # Make sure to fill in the sequence of harvest years as factors
   if (grepl("ar1", har.cor.str)) {
@@ -120,13 +124,19 @@ SerialStage2 <- function(data, vcov = NULL, har.cor.str = c("idt", "corv", "corh
   } else {
     data$har <- factor(data$har, levels = hars)
   }
+
+
   data$id <- factor(data$id,levels=id)
+  # Observed id x har combinations
   id.har <- sort(unique(data$id.har))
   tmp <- expand.grid(har = levels(data$har), id = id)
   id.har.all <- apply(tmp[,c("id","har")],1,paste,collapse=":")
+  # Set levels of id.har to all factorial levels
   data$id.har <- factor(data$id.har, levels = id.har.all)
-  trl.id.har <- paste0(data$trl, ":", id.har)
-  data$trl.id.har <- as.factor(trl.id.har)
+  id.trl <- unique(data$id.trl)
+  data$id.trl <- factor(data$id.trl, levels = id.trl)
+  id.subtrl <- data$id.subtrl
+  data$id.subtrl <- factor(data$id.subtrl, levels = id.subtrl)
   data$trl <- factor(data$trl, levels = trls)
 
 
@@ -142,13 +152,11 @@ SerialStage2 <- function(data, vcov = NULL, har.cor.str = c("idt", "corv", "corh
       data <- merge(x = data_tmp, y = data, all.x = TRUE)
       hars <- as.character(sort(unique(data$har)))
     }
-    data <- data[order(data$trl.id.har),]
+    data <- data[order(data$trl, data$id, data$har),]
 
   }
 
-
-
-  # missing data per harvest year
+  # non-missing data per harvest year
   har.miss <- tapply(X = data$BLUE, INDEX = data$har, FUN = function(x) sum(!is.na(x)))
   har.miss[is.na(har.miss)] <- 0
 
@@ -292,25 +300,25 @@ SerialStage2 <- function(data, vcov = NULL, har.cor.str = c("idt", "corv", "corh
 
   if (!is.null(vcov)) {
     stopifnot(is.list(vcov))
-    stopifnot(trls %in% names(vcov))
-    vcov <- vcov[trls]
+    stopifnot(subtrls %in% names(vcov))
+    vcov <- vcov[subtrls]
     vcov <- mapply(FUN=function(x, y){
       # Remove missing
       # xmiss <-
-      tmp <- paste(y, rownames(x),sep=":")
+      tmp <- paste(rownames(x), y, sep=":")
       dimnames(x) <- list(tmp, tmp)
       return(x)},x=vcov,y=as.list(names(vcov)))
 
     if (n.trait==1) {
-      ix <- lapply(vcov,function(y){which(rownames(y) %in% trl.id.har)})
-      random.effects <- paste0(random.effects,"+vm(trl.id.har,source=asremlOmega)")
+      ix <- lapply(vcov,function(y){which(rownames(y) %in% id.subtrl)})
+      random.effects <- paste0(random.effects,"+vm(id.subtrl,source=asremlOmega)")
     } else {
-      ix <- lapply(vcov,function(y){which(rownames(y) %in% tr.id.har.trait)})
-      random.effects <- paste0(random.effects,"+vm(trl.id.har.trait,source=asremlOmega)")
+      ix <- lapply(vcov,function(y){which(rownames(y) %in% id.subtrl.trait)})
+      random.effects <- paste0(random.effects,"+vm(id.subtrl.trait,source=asremlOmega)")
     }
 
-    omega.list <- vector("list", n.trl)
-    for (j in 1:n.trl) {
+    omega.list <- vector("list", n.subtrl)
+    for (j in 1:n.subtrl) {
       omega.list[[j]] <- as(vcov[[j]][ix[[j]],ix[[j]]],"dpoMatrix")
     }
     .GlobalEnv$asremlOmega <- direct_sum(lapply(omega.list,solve))
