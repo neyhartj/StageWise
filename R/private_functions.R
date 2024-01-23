@@ -143,38 +143,42 @@ f.cov.loc <- function(vc,locs) {
               loadings=D%*%fa.mat))
 }
 
-
-f.cov.har <- function(vc, locs) {
-  n.loc <- length(locs)
-  vcnames <- rownames(vc)
-  if (n.loc==2) {
-    iu <- apply(array(locs),1,grep,x=vcnames,fixed=T)
-    cov.mat <- diag(vc[iu,1])
-    dimnames(cov.mat) <- list(locs,locs)
-    cov.mat[1,2] <- cov.mat[2,1] <- vc[1,1]*sqrt(vc[iu[1],1]*vc[iu[2],1])
-    fa.mat <- t(chol(cov.mat))
-  } else {
-    psi <- diag(vc[apply(array(paste0(locs,"!var")),1,grep,x=vcnames,fixed=T),1])
-    fa.mat <- matrix(0,nrow=n.loc,ncol=2)
-    rownames(fa.mat) <- locs
-    ix <- apply(array(paste0(locs,"!fa1")),1,grep,x=vcnames,fixed=T)
-    fa.mat[,1] <- vc[ix,1]
-    ix <- apply(array(paste0(locs,"!fa2")),1,grep,x=vcnames,fixed=T)
-    fa.mat[,2] <- vc[ix,1]
-    cov.mat <- tcrossprod(fa.mat) + psi
-  }
-
-  #rotate
-  tmp <- svd(fa.mat)
-  fa.mat <- tmp$u %*% diag(tmp$d)
-  #scale
-  D <- diag(1/sqrt(diag(cov.mat)))
-  dimnames(D) <- list(locs,locs)
-
-  return(list(cov.mat=coerce_dpo(cov.mat),
-              loadings=D%*%fa.mat))
-}
-
+#
+# f.cov.har <- function(vc, hars) {
+#   n.loc <- length(hars)
+#   vcnames <- rownames(vc)
+#
+#
+#
+#
+#   if (n.loc==2) {
+#     iu <- apply(array(hars),1,grep,x=vcnames,fixed=T)
+#     cov.mat <- diag(vc[iu,1])
+#     dimnames(cov.mat) <- list(hars,hars)
+#     cov.mat[1,2] <- cov.mat[2,1] <- vc[1,1]*sqrt(vc[iu[1],1]*vc[iu[2],1])
+#     fa.mat <- t(chol(cov.mat))
+#   } else {
+#     psi <- diag(vc[apply(array(paste0(hars,"!var")),1,grep,x=vcnames,fixed=T),1])
+#     fa.mat <- matrix(0,nrow=n.loc,ncol=2)
+#     rownames(fa.mat) <- hars
+#     ix <- apply(array(paste0(hars,"!fa1")),1,grep,x=vcnames,fixed=T)
+#     fa.mat[,1] <- vc[ix,1]
+#     ix <- apply(array(paste0(hars,"!fa2")),1,grep,x=vcnames,fixed=T)
+#     fa.mat[,2] <- vc[ix,1]
+#     cov.mat <- tcrossprod(fa.mat) + psi
+#   }
+#
+#   #rotate
+#   tmp <- svd(fa.mat)
+#   fa.mat <- tmp$u %*% diag(tmp$d)
+#   #scale
+#   D <- diag(1/sqrt(diag(cov.mat)))
+#   dimnames(D) <- list(locs,locs)
+#
+#   return(list(cov.mat=coerce_dpo(cov.mat),
+#               loadings=D%*%fa.mat))
+# }
+#
 
 
 

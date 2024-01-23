@@ -199,7 +199,7 @@ SerialStage2 <- function(data, vcov = NULL, har.cor.str = c("idt", "corv", "corh
     tmp <- c("har","fixed.marker","additive","add x loc","dominance","heterosis","genotype","g x loc","g x har", "g x har corr", "Stage1.error","residual")
     # tmp <- c("env","fixed.marker","additive","add x loc","dominance","heterosis","genotype","g x loc","g x env","Stage1.error","residual")
   } else {
-    tmp <- c("har","fixed.marker","additive","add x loc","dominance","heterosis","g.resid","g x loc","g x har", "g x har corr", "Stage1.error","residual")
+    tmp <- c("har","fixed.marker","additive","add x loc", "add x har","dominance","heterosis","g.resid","g x loc","g x har", "g x har corr", "Stage1.error","residual")
     # tmp <- c("env","fixed.marker","additive","add x loc","dominance","heterosis","g.resid","g x loc","g x env","Stage1.error","residual")
   }
   vars <- array(data=numeric(0),dim=c(n.trait,n.trait,length(tmp)),dimnames=list(traits,traits,tmp))
@@ -273,7 +273,7 @@ SerialStage2 <- function(data, vcov = NULL, har.cor.str = c("idt", "corv", "corh
 
   # 4. How to code single or multiple trials
   if (n.trl > 1) {
-    random.effects.loc.trl.har <- paste0("loc:trl:", random.effects.har)
+    random.effects.loc.trl.har <- paste0("trl:", random.effects.har)
   } else {
     random.effects.loc.trl.har <- NULL
   }
@@ -555,8 +555,8 @@ SerialStage2 <- function(data, vcov = NULL, har.cor.str = c("idt", "corv", "corh
 
   vc.names <- rownames(vc)
   name2 <- vc.names
-  name2 <- gsub("vm(trl.id.har, source = asremlG, singG = \"PSD\")","additive",name2,fixed=T)
-  name2 <- gsub("vm(trl.id.har, source = asremlD)","dominance",name2,fixed=T)
+  name2 <- gsub("vm(id, source = asremlG, singG = \"PSD\")","additive",name2,fixed=T)
+  name2 <- gsub("vm(id, source = asremlD)","dominance",name2,fixed=T)
   name2 <- gsub("units!units","residual",name2,fixed=T)
   name2 <- gsub("units","residual",name2,fixed=T)
   name2 <- gsub("har.id","residual",name2,fixed=T)
@@ -572,7 +572,7 @@ SerialStage2 <- function(data, vcov = NULL, har.cor.str = c("idt", "corv", "corh
     if (!is.null(vcov)) {
       resid.vc <- Matrix(vars[1,1,"Stage1.error"], nrow = 1, ncol = 1)
     } else {
-      resid.vc <- Matrix(vc[grep("units",vc.names,fixed=T),1],ncol=1)
+      resid.vc <- Matrix(vc[grep("units",vc.names,fixed=T)[1],1],ncol=1)
     }
 
     if (n.loc > 1) {
@@ -660,6 +660,47 @@ SerialStage2 <- function(data, vcov = NULL, har.cor.str = c("idt", "corv", "corh
         vars[1,1,"g x har corr"] <- vc["id:har!har!cor",1]
 
       } else {
+        # Create a matrix of the cor structure is none
+        if (har.cor.str == "idt") {
+          cov.ans <- diag(ans$vparameters["id"], nrow = n.har, ncol = n.har)
+        } else {
+          terms <- names(ans$G.param)
+          terms_ignore <- terms[!grepl("id", terms)]
+          vars_ignore <- lapply(ans$G.param[setdiff(terms, terms_ignore)],
+                                function(x) names(x)[grepl("id", names(x))])
+          cov.ans <- getVarCov.asreml(asreml.obj = ans, which.matrix = "G",
+                                      ignore.terms = terms_ignore,
+                                      ignore.vars = vars_ignore)
+          dimnames(cov.ans) <- list(hars,hars)
+
+        }
+
+        geno1.vc <- cov.ans
+        geno2.vc <- Matrix(NA,nrow=0,ncol=0)
+        vars[1,1,"additive"] <- mean(geno1.vc[upper.tri(geno1.vc,diag=FALSE)]) * meanG
+        K <- kronecker(.GlobalEnv$asremlG,geno1.vc,make.dimnames = T)
+        vars[1,1,"add x har"] <- pvar(V=K,weights=gH.weights) - vars[1,1,"additive"]
+        model <- 1L
+
+        if (non.add=="g.resid") {
+          tmp <- Matrix(vc[grep("id:.*har",vc.names,fixed=T),1],ncol=1)
+          rownames(tmp) <- hars
+          geno2.vc <- coerce_dpo(tcrossprod(sqrt(tmp)))
+          K <- kronecker(Imat,geno2.vc,make.dimnames = T)
+          vars[1,1,"g.resid"] <- pvar(V=K,weights=gL.weights)
+          model <- 2L
+        }
+        if (non.add=="dom") {
+          tmp <- Matrix(vc[grep("source = asremlD):loc",vc.names,fixed=T),1],ncol=1)
+          rownames(tmp) <- locations
+          geno2.vc <- coerce_dpo(tcrossprod(sqrt(tmp)))
+          K <- kronecker(.GlobalEnv$asremlD,geno2.vc,make.dimnames = T)
+          vars[1,1,"dominance"] <- pvar(V=K,weights=gL.weights)
+          model <- 3L
+        }
+
+
+
         model <- 1L
         geno1.vc <- Matrix(vc[grep("source = asremlG",vc.names,fixed=T),1],ncol=1)
         geno2.vc <- Matrix(NA,nrow=0,ncol=0)
